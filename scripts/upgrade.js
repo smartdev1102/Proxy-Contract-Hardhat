@@ -12,7 +12,7 @@ async function main() {
   // If this script is run directly using `node` you may want to call compile
   // manually to make sure everything is compiled
   // await hre.run('compile');
-  const proxyAddress = '0x8EA77812Ab61a5c045ba1BEe9db2f4c20D6a7d96';
+  const proxyAddress = '0xFdf8a692072FAdcfC417b8482De65934F77a2f15';
   // We get the contract to deploy
   const MasterChef = await hre.ethers.getContractFactory("MasterChef");
   console.log("Preparing upgrade...");

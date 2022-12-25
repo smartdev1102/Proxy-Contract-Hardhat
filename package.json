@@ -12,6 +12,7 @@
   "dependencies": {
     "@openzeppelin/contracts": "^4.5.0",
     "@openzeppelin/contracts-upgradeable": "^4.5.2",
+    "@openzeppelin/upgrades-core": "^1.20.6",
     "dotenv": "^16.0.0",
     "ethers-eip712": "^0.2.0",
     "hardhat-gas-reporter": "^1.0.8",

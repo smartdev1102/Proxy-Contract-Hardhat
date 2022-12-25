@@ -394,7 +394,7 @@ interface IMasterChef {
     );
 
   function devAddr() external view returns (address);
-
+  function refAddr() external view returns (address);
 
   function bonusMultiplier() external view returns (uint256);
 
@@ -482,6 +482,18 @@ interface IOREO {
 
   event Transfer(address indexed from, address indexed to, uint256 value);
   event Approval(address indexed owner, address indexed spender, uint256 value);
+}
+
+interface IReferral {
+    function updateMasterChef(address _masterChef) external;
+
+    function activate(address referrer) external;
+    function activateBySign(address referee, address referrer, uint8 v, bytes32 r, bytes32 s) external;
+    function isActivated(address _address) external view returns (bool);
+
+    function updateReferralReward(address accountAddress, uint256 reward) external;
+
+    function claimReward() external;
 }
 
 library LinkList {
@@ -950,13 +962,6 @@ contract MasterChef is IMasterChef, OwnableUpgradeable, ReentrancyGuardUpgradeab
     uint256 burnFee;
   }
 
-  // default set fee
-  FeeInfo public feeInfo;
-
-  // Market wallet address
-  address public marketAddress;
-  // Burn address
-  address public burnAddress;
   // OREO token.
   IOREO public override oreo;
   // Stake address.
@@ -968,7 +973,6 @@ contract MasterChef is IMasterChef, OwnableUpgradeable, ReentrancyGuardUpgradeab
   uint256 public override oreoPerBlock;
   // Bonus muliplier for early users.
   uint256 public override bonusMultiplier;
-
   // Pool link list.
   LinkList.List public pools;
   // Info of each pool.
@@ -986,6 +990,16 @@ contract MasterChef is IMasterChef, OwnableUpgradeable, ReentrancyGuardUpgradeab
   // list of contracts that the pool allows to fund.
   mapping(address => LinkList.List) public stakeTokenCallerContracts;
 
+  // default set fee
+  FeeInfo public feeInfo;
+  // Market wallet address
+  address public marketAddress;
+  // Burn address
+  address public burnAddress;
+  // Refferal address.
+  address public override refAddr;
+  uint256 public refBps;
+
   event Deposit(address indexed funder, address indexed fundee, address indexed stakeToken, uint256 amount);
   event Withdraw(address indexed funder, address indexed fundee, address indexed stakeToken, uint256 amount);
   event EmergencyWithdraw(address indexed user, address indexed stakeToken, uint256 amount);
@@ -999,11 +1013,15 @@ contract MasterChef is IMasterChef, OwnableUpgradeable, ReentrancyGuardUpgradeab
   event SetDevBps(uint256 devBps);
   event UpdateMultiplier(uint256 bonusMultiplier);
   event SetDepostFee(uint256 marketFee, uint256 burnFee);
+  event SetRefAddress(address indexed refAddress);
+  event SetRefBps(uint256 refBps);
+  event SetMarketAddress(address indexed marketAddress);
 
   function initialize(
     IOREO _oreo,
     IStake _stake,
     address _devAddr,
+    address _refAddr,
     address _marketAddress,
     uint256 _oreoPerBlock,
     uint256 _startBlock
@@ -1012,6 +1030,14 @@ contract MasterChef is IMasterChef, OwnableUpgradeable, ReentrancyGuardUpgradeab
       _devAddr != address(0) && _devAddr != address(1),
       "initializer: _devAddr must not be address(0) or address(1)"
     );
+    require(
+      _refAddr != address(0) && _refAddr != address(1),
+      "initializer: _refAddr must not be address(0) or address(1)"
+    );
+    require(
+      _marketAddress != address(0) && _marketAddress != address(1),
+      "initializer: _marketAddress must not be address(0) or address(1)"
+    );
     OwnableUpgradeable.__Ownable_init();
     ReentrancyGuardUpgradeable.__ReentrancyGuard_init();
 
@@ -1019,9 +1045,11 @@ contract MasterChef is IMasterChef, OwnableUpgradeable, ReentrancyGuardUpgradeab
     oreo = _oreo;
     stake = _stake;
     devAddr = _devAddr;
+    refAddr = _refAddr;
     oreoPerBlock = _oreoPerBlock;
     startBlock = _startBlock;
     devBps = 0;
+    refBps = 0;
     marketAddress = _marketAddress;
     burnAddress = 0x000000000000000000000000000000000000dEaD;
     feeInfo = FeeInfo({
@@ -1088,6 +1116,24 @@ contract MasterChef is IMasterChef, OwnableUpgradeable, ReentrancyGuardUpgradeab
     emit SetDevAddress(_devAddr);
   }
 
+  function setRefAddress(address _refAddr) external onlyOwner {
+    require(
+      _refAddr != address(0) && _refAddr != address(1),
+      "setRefAddress: _refAddr must not be address(0) or address(1)"
+    );
+    refAddr = _refAddr;
+    emit SetRefAddress(_refAddr);
+  }
+
+  function setMarketAddress(address _marketAddr) external onlyOwner {
+    require(
+      _marketAddr != address(0) && _marketAddr != address(1),
+      "setMarketAddress: _marketAddr must not be address(0) or address(1)"
+    );
+    marketAddress = _marketAddr;
+    emit SetMarketAddress(_marketAddr);
+  }
+
   // Set OREO per block.
   function setOreoPerBlock(uint256 _oreoPerBlock) external onlyOwner {
     massUpdatePools();
@@ -1101,6 +1147,13 @@ contract MasterChef is IMasterChef, OwnableUpgradeable, ReentrancyGuardUpgradeab
     massUpdatePools();
     devBps = _devBps;
     emit SetDevBps(_devBps);
+  }
+
+  function setRefBps(uint256 _refBps) external onlyOwner {
+    require(_refBps <= 10000, "setRefBps::bad refBps");
+    massUpdatePools();
+    refBps = _refBps;
+    emit SetRefBps(_refBps);
   }
 
   // Add a pool. Can only be called by the owner.
@@ -1217,6 +1270,7 @@ contract MasterChef is IMasterChef, OwnableUpgradeable, ReentrancyGuardUpgradeab
     uint256 multiplier = getMultiplier(pool.lastRewardBlock, block.number);
     uint256 oreoReward = multiplier.mul(oreoPerBlock).mul(pool.allocPoint).div(totalAllocPoint);
     oreo.mint(devAddr, oreoReward.mul(devBps).div(10000));
+    oreo.mint(address(stake), oreoReward.mul(refBps).div(10000));
     oreo.mint(address(stake), oreoReward);
     pool.accOreoPerShare = pool.accOreoPerShare.add(oreoReward.mul(1e12).div(totalStakeToken));
     pool.lastRewardBlock = block.number;
@@ -1366,8 +1420,19 @@ contract MasterChef is IMasterChef, OwnableUpgradeable, ReentrancyGuardUpgradeab
     if (stakeTokenCallerContracts[_stakeToken].has(_msgSender())) {
       _masterChefCallee(_msgSender(), _stakeToken, _for, pending);
     }
-
+    _referralCallee(_for, pending);
     emit Harvest(_msgSender(), _for, _stakeToken, pending);
+  }
+
+  function _referralCallee(address _for, uint256 _pending) internal {
+    if (!refAddr.isContract()) {
+      return;
+    }
+    stake.safeOreoTransfer(_for, _pending.mul(refBps).div(10000));
+    (bool success, ) = refAddr.call(
+      abi.encodeWithSelector(IReferral.updateReferralReward.selector, _for, _pending.mul(refBps).div(10000))
+    );
+    require(success, "_referralCallee:  failed to execute updateReferralReward");
   }
 
   // Observer function for those contract implementing onBeforeLock, execute an onBeforelock statement
